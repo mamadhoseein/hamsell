@@ -19,11 +19,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("config_seller_bot")
 
-api_id = int(os.getenv("TG_API_ID", "16628384"))
-api_hash = os.getenv("TG_API_HASH", "a42b7a458a41ca52f7812a52f76bc561")
-bot_token = os.getenv("TG_BOT_TOKEN", "8275061448:AAFb92xtzI8wMxR23TkK8DIJ_Y7RtaR6B2Q")
-MAIN_ADMIN_ID = int(os.getenv("MAIN_ADMIN_ID", "1860659187"))
-YOUR_BRAND_ID = os.getenv("YOUR_BRAND_ID", "@shoooooooo")
+api_id = int(os.getenv("TG_API_ID", "TG_API_ID"))
+api_hash = os.getenv("TG_API_HASH", "TG_API_HASH")
+bot_token = os.getenv("TG_BOT_TOKEN", "TG_BOT_TOKEN")
+MAIN_ADMIN_ID = int(os.getenv("MAIN_ADMIN_ID", "MAIN_ADMIN_ID"))
+YOUR_BRAND_ID = os.getenv("YOUR_BRAND_ID", "YOUR_BRAND_ID")
 SESS_DIR = os.path.abspath("./.sessions"); os.makedirs(SESS_DIR, exist_ok=True)
 SESSION_NAME = "config_bot"
 app = Client(SESSION_NAME, api_id=api_id, api_hash=api_hash, bot_token=bot_token, workdir=SESS_DIR)
