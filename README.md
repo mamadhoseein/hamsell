@@ -119,7 +119,7 @@ journalctl -u config_bot.service -f --no-pager
 ## مرحله اول
 دانلود کردن فایل نصبی!
 ```bash
-wget https://github.com/mamadhoseein/hamsell/blob/main/hamsell
+wget https://raw.githubusercontent.com/mamadhoseein/hamsell/main/hamsell
 ```
 ## مرحله دوم
 دادن دسترسی به فایل 
@@ -129,7 +129,7 @@ chmod +x hamsell
 ## مرحله سوم
 اجرا کردن فایل hamsell
 ```bash
-hamsell
+./hamsell
 ```
 <div dir="rtl">
 
