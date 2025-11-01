@@ -29,9 +29,10 @@ NC="\033[0m"
 
 # --- Helper Functions ---
 
-# (ترفند پاکسازی)
+# (تغییر: بازگشت به دستور reset)
+# این دستور فاصله‌های خالی را حذف می‌کند، اما تاریخچه اسکرول شما را پاک نخواهد کرد
 clear_all() {
-    printf '\n%.0s' {1..100}
+    reset
 }
 
 # (تابع توقف)
@@ -40,42 +41,8 @@ pause_for_user() {
     read
 }
 
-# --- (تابع جدید و اتوماتیک) ---
-# این تابع مسیرهای سرویس را قبل از هر دستوری چک و اصلاح می‌کند
-fix_service_paths() {
-    echo -e "${CYAN}🔧 Verifying service file paths...${NC}"
-    local WEB_FILE="/etc/systemd/system/${WEB_SERVICE_NAME}.service"
-    local BOT_FILE="/etc/systemd/system/${BOT_SERVICE_NAME}.service"
-    local CHANGED=0
-
-    # بررسی فایل سرویس وب
-    if [ -f "$WEB_FILE" ]; then
-        if grep -q "/root/hamsell" "$WEB_FILE"; then
-            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' "$WEB_FILE"
-            CHANGED=1
-            echo -e "${GREEN}✅ Fixed path in Web service.${NC}"
-        fi
-    fi
-
-    # بررسی فایل سرویس ربات
-    if [ -f "$BOT_FILE" ]; then
-        if grep -q "/root/hamsell" "$BOT_FILE"; then
-            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' "$BOT_FILE"
-            CHANGED=1
-            echo -e "${GREEN}✅ Fixed path in Bot service.${NC}"
-        fi
-    fi
-
-    # اگر تغییری اعمال شد، systemd را ریلود کن
-    if [ $CHANGED -eq 1 ]; then
-        echo -e "${YELLOW}Reloading systemd daemon...${NC}"
-        sudo systemctl daemon-reload
-    fi
-}
-# --- (پایان تابع جدید) ---
-
 # ------------------------------------------------
-# Main Service Control Functions (Requires SUDO internal)
+# Main Service Control Functions
 # ------------------------------------------------
 
 control_service() {
@@ -102,7 +69,7 @@ control_service() {
 }
 
 # ------------------------------------------------
-# Dependency Management Function (Includes Pillow)
+# Dependency Management Function
 # ------------------------------------------------
 
 install_deps() {
@@ -126,12 +93,7 @@ install_deps() {
         }
         deactivate
     )
-
-    echo -e "${GREEN}✅ All Python dependencies successfully installed.${NC}"
-    echo -e "${CYAN}Applying changes and restarting Web Panel...${NC}"
-    sudo systemctl daemon-reload
-    sudo systemctl restart ${WEB_SERVICE_NAME}.service
-    echo -e "${GREEN}✅ Dependencies installed and Web Panel restarted.${NC}"
+    echo -e "${GREEN}✅ Python dependencies successfully installed.${NC}"
 }
 
 # ------------------------------------------------
@@ -142,14 +104,17 @@ update_app() {
     echo -e "${YELLOW}🔄 Starting application code update...${NC}"
     cd "${PROJECT_PATH}" || { echo -e "${RED}Error: Project directory not found!${NC}"; return 1; }
 
-    control_service bot stop
-    control_service web stop
+    # توقف سرویس‌ها قبل از آپدیت
+    sudo systemctl stop ${WEB_SERVICE_NAME}.service
+    sudo systemctl stop ${BOT_SERVICE_NAME}.service
+    
     echo -e "${CYAN}2. Pulling latest code from Git...${NC}"
     sudo git pull origin main
-    install_deps # Update dependencies
-    control_service bot restart
-    control_service web restart
-    echo -e "${GREEN}🎉 Update complete. ${NC}"
+    
+    # نصب نیازمندی‌ها (بدون ریستارت)
+    install_deps
+    
+    echo -e "${GREEN}🎉 Update complete. Ready for restart.${NC}"
 }
 
 install() {
@@ -167,7 +132,8 @@ install() {
     sudo git clone "$GIT_REPO_URL" || { echo -e "${RED}Error cloning project!${NC}"; exit 1; }
     sudo chown -R root:root "${PROJECT_PATH}"
     
-    install_deps || { exit 1; } # این تابع سرویس وب را هم ریستارت می‌کند
+    # نصب نیازمندی‌ها
+    install_deps || { exit 1; }
 
     echo -e "${YELLOW}⚙️ 4. Deploying Web Installer Service...${NC}"
 
@@ -188,7 +154,6 @@ RestartSec=5
 WantedBy=multi-user.target
 EOL
     
-    # ریلود و ریستارت نهایی (که توسط install_deps انجام شده بود)
     sudo systemctl daemon-reload
     sudo systemctl restart ${WEB_SERVICE_NAME}.service
     
@@ -206,8 +171,8 @@ EOL
 cleanup() {
     echo -e "${RED}🛑 Starting Cleanup Process...${NC}"
     echo -e "${RED}1. Stopping and removing systemd services...${NC}"
-    control_service web stop
-    control_service bot stop
+    sudo systemctl stop ${WEB_SERVICE_NAME}.service 2>/dev/null
+    sudo systemctl stop ${BOT_SERVICE_NAME}.service 2>/dev/null
     
     sudo rm -f /etc/systemd/system/${WEB_SERVICE_NAME}.service
     sudo rm -f /etc/systemd/system/${BOT_SERVICE_NAME}.service
@@ -229,9 +194,9 @@ main_menu() {
     echo -e "${CYAN} 🤖 Hamsell CLI Management Tool 🤖 ${NC}"
     echo -e "${BLUE}========================================${NC}"
     echo -e "    ${GREEN}1${NC}) 🚀 ${CYAN}Full Install${NC} (From Scratch)"
-    echo -e "    ${GREEN}2${NC}) 📦 ${CYAN}Install Dependencies${NC} (Fix missing modules)"
+    echo -e "    ${GREEN}2${NC}) 📦 ${CYAN}Install Dependencies & Fix Paths${NC}"
     echo -e "    ${GREEN}3${NC}) 🔄 ${CYAN}Update Project Code${NC} (Pull & Restart)"
-    echo -e "    ${GREEN}4${NC}) 🔄 ${CYAN}Restart All Services${NC}"
+    echo -e "    ${GREEN}4${NC}) 🔄 ${CYAN}Fix & Restart All Services${NC}"
     echo -e "    ${GREEN}5${NC}) ⚙️ ${CYAN}Check Service Status${NC}"
     echo -e "    ${GREEN}6${NC}) 🛑 ${CYAN}Stop All Services${NC}"
     echo -e "    ${RED}7${NC}) 🗑️ ${RED}Cleanup Project${NC} (Delete All)"
@@ -247,33 +212,61 @@ main_menu() {
             ;;
         2) 
             clear_all
-            fix_service_paths # <--- اصلاح اتوماتیک
-            install_deps 
+            echo -e "${CYAN}Installing Python dependencies...${NC}"
+            install_deps # (نصب پکیج‌ها)
+            
+            echo -e "\n${YELLOW}Now fixing service paths and restarting...${NC}"
+            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' /etc/systemd/system/config_bot_web.service
+            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' /etc/systemd/system/config_bot.service
+            sudo systemctl daemon-reload
+            sudo systemctl restart ${WEB_SERVICE_NAME}.service
+            sudo systemctl restart ${BOT_SERVICE_NAME}.service
+            echo -e "${GREEN}✅ All services fixed and restarted.${NC}"
+            
             pause_for_user
             ;;
         3) 
             clear_all
-            fix_service_paths # <--- اصلاح اتوماتیک
-            update_app 
+            update_app # (شامل گیت پول و نصب پکیج‌ها)
+
+            echo -e "\n${YELLOW}Fixing paths and restarting all services...${NC}"
+            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' /etc/systemd/system/config_bot_web.service
+            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' /etc/systemd/system/config_bot.service
+            sudo systemctl daemon-reload
+            sudo systemctl restart ${WEB_SERVICE_NAME}.service
+            sudo systemctl restart ${BOT_SERVICE_NAME}.service
+            echo -e "${GREEN}✅ All services fixed and restarted.${NC}"
+
             pause_for_user
             ;;
         4) 
             clear_all
-            fix_service_paths # <--- اصلاح اتوماتیک
-            control_service bot restart
-            control_service web restart
+            echo -e "${YELLOW}Fixing paths and restarting all services...${NC}"
+            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' /etc/systemd/system/config_bot_web.service
+            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' /etc/systemd/system/config_bot.service
+            sudo systemctl daemon-reload
+            sudo systemctl restart ${WEB_SERVICE_NAME}.service
+            sudo systemctl restart ${BOT_SERVICE_NAME}.service
+            echo -e "${GREEN}✅ All services fixed and restarted.${NC}"
+            
             pause_for_user
             ;;
         5) 
             clear_all
-            fix_service_paths # <--- اصلاح اتوماتیک
+            # اول اصلاح کن بعد وضعیت را نشان بده
+            echo -e "${YELLOW}Fixing paths before checking status...${NC}"
+            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' /etc/systemd/system/config_bot_web.service
+            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' /etc/systemd/system/config_bot.service
+            sudo systemctl daemon-reload > /dev/null 2>&1
+            
+            echo -e "${CYAN}--- Bot Status ---${NC}"
             systemctl status ${BOT_SERVICE_NAME}.service --no-pager -n 5
+            echo -e "${CYAN}--- Web Status ---${NC}"
             systemctl status ${WEB_SERVICE_NAME}.service --no-pager -n 5
             pause_for_user
             ;;
         6) 
             clear_all
-            fix_service_paths # <--- اصلاح اتوماتیک
             control_service bot stop
             control_service web stop
             pause_for_user
