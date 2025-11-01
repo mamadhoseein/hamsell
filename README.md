@@ -115,3 +115,19 @@ journalctl -u config_bot.service -f --no-pager
 ```
 
 ##🚀 نصب فوری
+مراحل را باید به ترتیب برید.
+## مرحله اول
+دانلود کردن فایل نصبی!
+```bash
+wget https://github.com/mamadhoseein/hamsell/blob/main/hamsell
+```
+## مرحله دوم
+دادن دسترسی به فایل 
+```bash
+chmod +x hamsell
+```
+## مرحله سوم
+اجرا کردن فایل hamsell
+```bash
+hamsell
+```
