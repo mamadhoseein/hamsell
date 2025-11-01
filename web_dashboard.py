@@ -243,12 +243,19 @@ def is_installed():
 
 def run_shell_command(command):
     try:
-        subprocess.run(command, shell=True, check=True, capture_output=True, text=True, timeout=15)
-        return True, None
+        # اجرای دستور با پوسته بش برای اطمینان از خواندن .env
+        result = subprocess.run(
+            ["bash", "-c", command],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        return result.stdout, result.stderr
     except subprocess.CalledProcessError as e:
-        return False, e.stderr.strip()
+        return None, e.stderr.strip()
     except Exception as e:
-        return False, str(e)
+        return None, str(e)
 
 def get_service_status(service_name):
     stdout, _ = run_shell_command(f"systemctl is-active {service_name}")
@@ -311,6 +318,7 @@ After=network.target
 User=root
 WorkingDirectory={project_path}
 EnvironmentFile={project_path}/{ENV_FILE}
+# FIX: Gunicorn path needs to be absolute
 ExecStart={GUNICORN_PATH} --workers 4 --bind 0.0.0.0:5000 "web_dashboard:app"
 Restart=always
 RestartSec=10
@@ -452,7 +460,6 @@ def control_service(service, action):
 
     _, stderr = run_shell_command(f"systemctl {action} {service_name}")
     if stderr:
-        # flash() requires template rendering, redirecting is simpler
         print(f"Error executing action: {stderr}")
 
     return redirect(url_for("dashboard"))
