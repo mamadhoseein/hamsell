@@ -2,3 +2,5 @@ pyrogram
 requests
 qrcode
 Pillow
+Flask
+gunicorn
