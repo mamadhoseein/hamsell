@@ -113,3 +113,5 @@ systemctl status config_bot_web.service
 ```bash
 journalctl -u config_bot.service -f --no-pager
 ```
+
+##🚀 نصب فوری
