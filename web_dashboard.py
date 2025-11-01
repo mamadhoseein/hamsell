@@ -15,7 +15,6 @@ USERS_FILE = "users.json"
 ORDERS_FILE = "orders.json"
 LOG_LINES_TO_SHOW = 100
 PYTHON_PATH = subprocess.getoutput("which python3")
-GUNICORN_PATH = subprocess.getoutput("which gunicorn")
 
 app = Flask(__name__)
 
@@ -185,7 +184,7 @@ HTML_INSTALL = """
     <div class="install-box">
         <h2>نصب ربات hamsell</h2>
         <p style="text-align: center; color: #ccc; margin-top: -10px;">لاگین پیش‌فرض: (admin / admin)</p>
-
+        
         {% if error %}
             <p class="error">{{ error }}</p>
         {% endif %}
@@ -195,10 +194,10 @@ HTML_INSTALL = """
                 <h4>تنظیمات ربات تلگرام</h4>
                 <label for="TG_BOT_TOKEN">توکن ربات:</label>
                 <input type="text" id="TG_BOT_TOKEN" name="TG_BOT_TOKEN" required>
-
+                
                 <label for="MAIN_ADMIN_ID">آیدی عددی ادمین:</label>
                 <input type="text" id="MAIN_ADMIN_ID" name="MAIN_ADMIN_ID" required>
-
+                
                 <label for="YOUR_BRAND_ID">آیدی پشتیبانی (مثال: @hamsell):</label>
                 <input type="text" id="YOUR_BRAND_ID" name="YOUR_BRAND_ID" required>
             </div>
@@ -207,7 +206,7 @@ HTML_INSTALL = """
                 <h4>تنظیمات API تلگرام</h4>
                 <label for="TG_API_ID">API ID:</label>
                 <input type="text" id="TG_API_ID" name="TG_API_ID" required>
-
+                
                 <label for="TG_API_HASH">API Hash:</label>
                 <input type="text" id="TG_API_HASH" name="TG_API_HASH" required>
             </div>
@@ -216,11 +215,11 @@ HTML_INSTALL = """
                 <h4>تنظیمات جدید پنل وب</h4>
                 <label for="WEB_ADMIN_USER">نام کاربری جدید پنل (پیش‌فرض: admin):</label>
                 <input type="text" id="WEB_ADMIN_USER" name="WEB_ADMIN_USER" placeholder="admin">
-
+                
                 <label for="WEB_ADMIN_PASS">رمز عبور جدید پنل:</label>
                 <input type="password" id="WEB_ADMIN_PASS" name="WEB_ADMIN_PASS" required>
             </div>
-
+            
             <button type="submit">نصب و راه‌اندازی نهایی</button>
         </form>
     </div>
@@ -231,6 +230,7 @@ HTML_INSTALL = """
 # --- توابع کمکی ---
 
 def load_env():
+    """فایل .env را می‌خواند و در متغیرهای محیطی بارگذاری می‌کند"""
     if os.path.exists(ENV_FILE):
         with open(ENV_FILE) as f:
             for line in f:
@@ -239,9 +239,11 @@ def load_env():
                     os.environ[key] = value
 
 def is_installed():
+    """چک می‌کند که آیا فایل .env ساخته شده است یا نه"""
     return os.path.exists(ENV_FILE)
 
 def run_shell_command(command):
+    """یک دستور شل را اجرا می‌کند"""
     try:
         # اجرای دستور با پوسته بش برای اطمینان از خواندن .env
         result = subprocess.run(
@@ -258,12 +260,14 @@ def run_shell_command(command):
         return None, str(e)
 
 def get_service_status(service_name):
+    """وضعیت یک سرویس systemd را می‌گیرد"""
     stdout, _ = run_shell_command(f"systemctl is-active {service_name}")
     if not stdout:
         return "not_found"
     return stdout.strip()
 
 def get_bot_logs():
+    """آخرین لاگ‌های ربات را از journalctl می‌خواند"""
     stdout, stderr = run_shell_command(
         f"journalctl -u {BOT_SERVICE_NAME} -n {LOG_LINES_TO_SHOW} --no-pager"
     )
@@ -272,26 +276,30 @@ def get_bot_logs():
     return stdout or "No logs found."
 
 def get_stats():
+    """آمار را از فایل‌های JSON می‌خواند"""
     try:
         with open(USERS_FILE, "r") as f:
             total_users = len(json.load(f))
     except Exception:
         total_users = "N/A"
-
+        
     try:
         with open(ORDERS_FILE, "r") as f:
             total_orders = len(json.load(f))
     except Exception:
         total_orders = "N/A"
-
+        
     return {
         "total_users": total_users,
         "total_orders": total_orders,
     }
 
 def create_systemd_services(env_data):
+    """سرویس‌های systemd را برای ربات و وب می‌سازد"""
+    
     project_path = os.path.dirname(os.path.abspath(__file__))
-
+    
+    # --- ساخت سرویس ربات ---
     bot_service_content = f"""
 [Unit]
 Description=hamsell Telegram Bot Service
@@ -308,7 +316,8 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 """
-
+    
+    # --- ساخت سرویس وب ---
     web_service_content = f"""
 [Unit]
 Description=hamsell Web Dashboard Service
@@ -318,22 +327,22 @@ After=network.target
 User=root
 WorkingDirectory={project_path}
 EnvironmentFile={project_path}/{ENV_FILE}
-# FIX: Gunicorn path needs to be absolute
-ExecStart={GUNICORN_PATH} --workers 4 --bind 0.0.0.0:5000 "web_dashboard:app"
+# --- FIX: Use python module to run gunicorn ---
+ExecStart={PYTHON_PATH} -m gunicorn --workers 4 --bind 0.0.0.0:5000 "web_dashboard:app"
 Restart=always
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 """
-
+    
     try:
         with open(f"/etc/systemd/system/{BOT_SERVICE_NAME}.service", "w") as f:
             f.write(bot_service_content)
-
+        
         with open(f"/etc/systemd/system/{WEB_SERVICE_NAME}.service", "w") as f:
             f.write(web_service_content)
-
+        
         return True, None
     except Exception as e:
         return False, f"خطا در ساخت فایل سرویس: {e}"
@@ -346,6 +355,11 @@ app.secret_key = os.getenv("WEB_SECRET_KEY", "temp_secret_key_for_install")
 
 @app.before_request
 def check_install_and_login():
+    """
+    قبل از هر درخواست، چک می‌کند که نصب انجام شده یا نه.
+    اگر نصب نشده بود، به صفحه نصب هدایت می‌کند.
+    اگر نصب شده بود ولی لاگین نبود، به صفحه لاگین هدایت می‌کند.
+    """
     if request.path == '/install' or request.path.startswith('/static'):
         return
 
@@ -354,12 +368,13 @@ def check_install_and_login():
 
     # بارگذاری مجدد .env برای گرفتن آپدیت‌ها
     load_env()
-
+    
     if request.path != '/login' and not session.get('logged_in'):
         return redirect(url_for('login'))
 
 @app.route("/install", methods=["GET", "POST"])
 def install():
+    """صفحه نصب (فقط بار اول)"""
     if is_installed():
         return redirect(url_for('login'))
 
@@ -369,14 +384,14 @@ def install():
 
     if request.method == "POST":
         env_data = request.form.to_dict()
-
+        
         if not env_data.get("WEB_ADMIN_USER"):
             env_data["WEB_ADMIN_USER"] = "admin"
         if not env_data.get("WEB_ADMIN_PASS"):
             return render_template_string(HTML_INSTALL, error="رمز عبور پنل وب الزامی است")
-
+            
         env_data["WEB_SECRET_KEY"] = os.urandom(16).hex()
-
+        
         try:
             with open(ENV_FILE, "w") as f:
                 for key, value in env_data.items():
@@ -387,17 +402,17 @@ def install():
         success, error = create_systemd_services(env_data)
         if not success:
             return render_template_string(HTML_INSTALL, error=error)
-
+            
         run_shell_command("systemctl daemon-reload")
         run_shell_command(f"systemctl enable {BOT_SERVICE_NAME}")
         run_shell_command(f"systemctl enable {WEB_SERVICE_NAME}")
         run_shell_command(f"systemctl start {BOT_SERVICE_NAME}")
-
+        
         # ریستارت کردن سرویس وب در یک ترد جداگانه تا خودکشی نکند
         def restart_web_service():
             time.sleep(1) # یک ثانیه تاخیر تا پاسخ به مرورگر ارسال شود
             run_shell_command(f"systemctl restart {WEB_SERVICE_NAME}")
-
+        
         threading.Thread(target=restart_web_service).start()
 
         return "نصب با موفقیت انجام شد! در حال ریستارت کردن پنل وب و انتقال به صفحه لاگین..." + \
@@ -408,13 +423,14 @@ def install():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    """صفحه لاگین"""
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
-
+        
         ADMIN_USERNAME = os.getenv("WEB_ADMIN_USER", DEFAULT_USERNAME)
         ADMIN_PASSWORD = os.getenv("WEB_ADMIN_PASS", DEFAULT_PASSWORD)
-
+        
         if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
             session["logged_in"] = True
             return redirect(url_for("dashboard"))
@@ -424,15 +440,17 @@ def login():
 
 @app.route("/logout")
 def logout():
+    """خروج از حساب کاربری"""
     session.pop("logged_in", None)
     return redirect(url_for("login"))
 
 @app.route("/")
 def dashboard():
+    """صفحه اصلی داشبورد"""
     bot_status = get_service_status(BOT_SERVICE_NAME)
     web_status = get_service_status(WEB_SERVICE_NAME)
     stats = get_stats()
-
+    
     return render_template_string(HTML_DASHBOARD, 
                                   bot_status=bot_status, 
                                   web_status=web_status, 
@@ -440,14 +458,18 @@ def dashboard():
 
 @app.route("/logs")
 def logs():
+    """صفحه نمایش لاگ‌ها"""
     log_data = get_bot_logs()
     return render_template_string(HTML_LOGS, log_data=log_data)
 
 @app.route("/control/<service>/<action>")
 def control_service(service, action):
+    """
+    سرویس‌ها را کنترل می‌کند (start, stop, restart)
+    """
     if not session.get('logged_in'):
         abort(403) 
-
+        
     if service == "bot":
         service_name = BOT_SERVICE_NAME
     elif service == "web":
@@ -461,7 +483,7 @@ def control_service(service, action):
     _, stderr = run_shell_command(f"systemctl {action} {service_name}")
     if stderr:
         print(f"Error executing action: {stderr}")
-
+        
     return redirect(url_for("dashboard"))
 
 # --- اجرای برنامه ---
