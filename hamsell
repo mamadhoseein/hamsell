@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ================================================
-#       Hamsell Management CLI Tool
+#       Hamsell Management CLI Tool
 # ------------------------------------------------
 # Designed for simple execution without "sudo hamsell"
 # ================================================
@@ -27,6 +27,53 @@ CYAN="\033[0;36m"
 BLUE="\033[0;34m"
 NC="\033[0m"
 
+# --- Helper Functions ---
+
+# (ترفند پاکسازی)
+clear_all() {
+    printf '\n%.0s' {1..100}
+}
+
+# (تابع توقف)
+pause_for_user() {
+    echo -e "\n${YELLOW}Press [Enter] to return to the menu...${NC}"
+    read
+}
+
+# --- (تابع جدید و اتوماتیک) ---
+# این تابع مسیرهای سرویس را قبل از هر دستوری چک و اصلاح می‌کند
+fix_service_paths() {
+    echo -e "${CYAN}🔧 Verifying service file paths...${NC}"
+    local WEB_FILE="/etc/systemd/system/${WEB_SERVICE_NAME}.service"
+    local BOT_FILE="/etc/systemd/system/${BOT_SERVICE_NAME}.service"
+    local CHANGED=0
+
+    # بررسی فایل سرویس وب
+    if [ -f "$WEB_FILE" ]; then
+        if grep -q "/root/hamsell" "$WEB_FILE"; then
+            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' "$WEB_FILE"
+            CHANGED=1
+            echo -e "${GREEN}✅ Fixed path in Web service.${NC}"
+        fi
+    fi
+
+    # بررسی فایل سرویس ربات
+    if [ -f "$BOT_FILE" ]; then
+        if grep -q "/root/hamsell" "$BOT_FILE"; then
+            sudo sed -i 's|/root/hamsell|/opt/hamsell|g' "$BOT_FILE"
+            CHANGED=1
+            echo -e "${GREEN}✅ Fixed path in Bot service.${NC}"
+        fi
+    fi
+
+    # اگر تغییری اعمال شد، systemd را ریلود کن
+    if [ $CHANGED -eq 1 ]; then
+        echo -e "${YELLOW}Reloading systemd daemon...${NC}"
+        sudo systemctl daemon-reload
+    fi
+}
+# --- (پایان تابع جدید) ---
+
 # ------------------------------------------------
 # Main Service Control Functions (Requires SUDO internal)
 # ------------------------------------------------
@@ -44,14 +91,12 @@ control_service() {
     esac
 
     echo -e "${YELLOW}⚙️ Executing [${ACTION}] on ${DISPLAY_NAME}...${NC}"
-    # اجرای systemctl با sudo داخلی برای کاربر نهایی
     sudo systemctl "$ACTION" "$SERVICE_NAME" 2>/dev/null
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ ${DISPLAY_NAME} successfully ${ACTION}ed.${NC}"
     else
         echo -e "${RED}❌ Failed! Checking status...${NC}"
-        # استفاده از systemctl بدون sudo برای نمایش status
         systemctl status "$SERVICE_NAME" --no-pager -n 5
     fi
 }
@@ -67,33 +112,25 @@ install_deps() {
     
     if [ ! -d "$VENV_PATH" ]; then
         echo -e "${YELLOW}Virtual environment not found. Creating it now.${NC}"
-        # اجرای ساخت VENV با sudo چون پوشه پروژه در /opt/ است
         sudo python3 -m venv "${VENV_PATH}"
     fi
 
-    # اجرای دستورات در یک subshell با دسترسی venv
     (
         source "${VENV_PATH}/bin/activate"
         echo -e "${CYAN}Installing core dependencies...${NC}"
-        
-        # Direct Installation of all packages including Pillow
         pip install -q --upgrade pip
         pip install -q gunicorn flask qrcode requests routeros_api pyrogram TgCrypto Pillow || {
             echo -e "${RED}❌ FATAL ERROR: Failed to install Python packages!${NC}";
             deactivate
             return 1
         }
-        
         deactivate
     )
 
     echo -e "${GREEN}✅ All Python dependencies successfully installed.${NC}"
-
-    # Reload and Restart Web Service to apply changes
     echo -e "${CYAN}Applying changes and restarting Web Panel...${NC}"
     sudo systemctl daemon-reload
     sudo systemctl restart ${WEB_SERVICE_NAME}.service
-
     echo -e "${GREEN}✅ Dependencies installed and Web Panel restarted.${NC}"
 }
 
@@ -107,45 +144,34 @@ update_app() {
 
     control_service bot stop
     control_service web stop
-
     echo -e "${CYAN}2. Pulling latest code from Git...${NC}"
-    # اجرای git pull با sudo چون پروژه در /opt/ است
     sudo git pull origin main
-
     install_deps # Update dependencies
-
     control_service bot restart
     control_service web restart
-
     echo -e "${GREEN}🎉 Update complete. ${NC}"
 }
 
 install() {
-    # Check if git clone should be executed or if the project already exists
     if [ -e "$PROJECT_PATH" ]; then
         echo -e "${YELLOW}Project folder already exists. Running cleanup first.${NC}"
         cleanup
     fi
 
     echo -e "${YELLOW}🚀 1. Installing server dependencies...${NC}"
-    # اجرای apt با sudo
     sudo apt update > /dev/null 2>&1
     sudo apt install -y python3 python3-pip python3-venv git > /dev/null 2>&1
 
     echo -e "${YELLOW}📥 2. Cloning project from Git...${NC}"
     cd "${PROJECT_ROOT}" || exit
-    
-    # اجرای git clone با sudo و تغییر مالکیت
     sudo git clone "$GIT_REPO_URL" || { echo -e "${RED}Error cloning project!${NC}"; exit 1; }
-    # تنظیم مالکیت برای root برای اجرای systemd
     sudo chown -R root:root "${PROJECT_PATH}"
     
-    # 3. Install Dependencies in VENV
-    install_deps || { exit 1; }
+    install_deps || { exit 1; } # این تابع سرویس وب را هم ریستارت می‌کند
 
     echo -e "${YELLOW}⚙️ 4. Deploying Web Installer Service...${NC}"
 
-    # Use the Python path of the newly installed VENV (This is now /opt/hamsell/myenv/...)
+    # ساخت فایل سرویس اولیه (موقت) برای نصب‌کننده وب
     cat > /etc/systemd/system/${WEB_SERVICE_NAME}.service << EOL
 [Unit]
 Description=hamsell Web Installer
@@ -162,23 +188,23 @@ RestartSec=5
 WantedBy=multi-user.target
 EOL
     
-    # daemon-reload and web restart is handled by install_deps function.
-
+    # ریلود و ریستارت نهایی (که توسط install_deps انجام شده بود)
+    sudo systemctl daemon-reload
+    sudo systemctl restart ${WEB_SERVICE_NAME}.service
+    
     IP_ADDR=$(hostname -I | awk '{print $1}' | head -n 1)
 
     echo
     echo -e "${GREEN}🎉 Initial Setup Complete!${NC}"
     echo -e "Please open your browser and navigate to:"
     echo
-    echo -e "  ${YELLOW}http://${IP_ADDR}:5000/install${NC}"
+    echo -e "  ${YELLOW}http://${IP_ADDR}:5000/install${NC}"
     echo
     echo -e "Use default admin/admin credentials for the *first* login."
 }
 
 cleanup() {
     echo -e "${RED}🛑 Starting Cleanup Process...${NC}"
-
-    # 1. Stop and remove systemd services
     echo -e "${RED}1. Stopping and removing systemd services...${NC}"
     control_service web stop
     control_service bot stop
@@ -187,9 +213,7 @@ cleanup() {
     sudo rm -f /etc/systemd/system/${BOT_SERVICE_NAME}.service
     sudo systemctl daemon-reload
 
-    # 2. Remove project folder
     echo -e "${RED}2. Removing project folder and virtual environment...${NC}"
-    # حذف با sudo چون در /opt/ است.
     sudo rm -rf "${PROJECT_PATH}"
     
     echo -e "${GREEN}✅ Cleanup complete.${NC}"
@@ -200,46 +224,79 @@ cleanup() {
 # Main Menu Logic
 # ------------------------------------------------
 main_menu() {
+    clear_all 
     echo -e "\n${BLUE}========================================${NC}"
     echo -e "${CYAN} 🤖 Hamsell CLI Management Tool 🤖 ${NC}"
     echo -e "${BLUE}========================================${NC}"
-    echo -e "   ${GREEN}1${NC}) 🚀 ${CYAN}Full Install${NC} (From Scratch)"
-    echo -e "   ${GREEN}2${NC}) 📦 ${CYAN}Install Dependencies${NC} (Fix missing modules)"
-    echo -e "   ${GREEN}3${NC}) 🔄 ${CYAN}Update Project Code${NC} (Pull & Restart)"
-    echo -e "   ${GREEN}4${NC}) 🔄 ${CYAN}Restart All Services${NC}"
-    echo -e "   ${GREEN}5${NC}) ⚙️ ${CYAN}Check Service Status${NC}"
-    echo -e "   ${GREEN}6${NC}) 🛑 ${CYAN}Stop All Services${NC}"
-    echo -e "   ${RED}7${NC}) 🗑️ ${RED}Cleanup Project${NC} (Delete All)"
-    echo -e "   ${GREEN}0${NC}) Exit"
+    echo -e "    ${GREEN}1${NC}) 🚀 ${CYAN}Full Install${NC} (From Scratch)"
+    echo -e "    ${GREEN}2${NC}) 📦 ${CYAN}Install Dependencies${NC} (Fix missing modules)"
+    echo -e "    ${GREEN}3${NC}) 🔄 ${CYAN}Update Project Code${NC} (Pull & Restart)"
+    echo -e "    ${GREEN}4${NC}) 🔄 ${CYAN}Restart All Services${NC}"
+    echo -e "    ${GREEN}5${NC}) ⚙️ ${CYAN}Check Service Status${NC}"
+    echo -e "    ${GREEN}6${NC}) 🛑 ${CYAN}Stop All Services${NC}"
+    echo -e "    ${RED}7${NC}) 🗑️ ${RED}Cleanup Project${NC} (Delete All)"
+    echo -e "    ${GREEN}0${NC}) Exit"
     echo -e "${BLUE}========================================${NC}"
     read -rp "Enter your choice: " CHOICE
 
     case "$CHOICE" in
-        1) install ;;
-        2) install_deps ;;
-        3) update_app ;;
+        1) 
+            clear_all
+            install 
+            pause_for_user
+            ;;
+        2) 
+            clear_all
+            fix_service_paths # <--- اصلاح اتوماتیک
+            install_deps 
+            pause_for_user
+            ;;
+        3) 
+            clear_all
+            fix_service_paths # <--- اصلاح اتوماتیک
+            update_app 
+            pause_for_user
+            ;;
         4) 
+            clear_all
+            fix_service_paths # <--- اصلاح اتوماتیک
             control_service bot restart
             control_service web restart
+            pause_for_user
             ;;
         5) 
+            clear_all
+            fix_service_paths # <--- اصلاح اتوماتیک
             systemctl status ${BOT_SERVICE_NAME}.service --no-pager -n 5
             systemctl status ${WEB_SERVICE_NAME}.service --no-pager -n 5
+            pause_for_user
             ;;
         6) 
+            clear_all
+            fix_service_paths # <--- اصلاح اتوماتیک
             control_service bot stop
             control_service web stop
+            pause_for_user
             ;;
         7) 
+            clear_all
             read -rp "⚠️ Are you sure you want to delete everything? (yes/no): " CONFIRM
             if [[ "$CONFIRM" == "yes" ]]; then
                 cleanup
             else
                 echo -e "${YELLOW}Cleanup operation cancelled.${NC}"
             fi
+            pause_for_user
             ;;
-        0) exit 0 ;;
-        *) echo -e "${RED}Invalid option!${NC}"; main_menu ;;
+        0) 
+            clear_all
+            exit 0 
+            ;;
+        *) 
+            clear_all
+            echo -e "${RED}Invalid option!${NC}"
+            pause_for_user
+            ;;
     esac
     main_menu
 }
