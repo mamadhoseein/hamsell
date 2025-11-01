@@ -44,3 +44,9 @@ sudo apt update && sudo apt upgrade -y
 ```bash
 sudo apt install -y python3-pip python3-venv
 ```
+مرحله ۲: دریافت سورس و نصب پکیج‌ها
+۱. سورس پروژه را کلون کرده و وارد پوشه شوید (فرض: مسیر /root/hamsell):
+```bash
+git clone https://github.com/mamadhoseein/hamsell.git /root/hamsell
+cd /root/hamsell
+```
