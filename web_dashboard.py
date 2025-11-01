@@ -4,6 +4,7 @@ import subprocess
 import threading
 import time
 from flask import Flask, request, render_template_string, redirect, url_for, session, abort, flash
+import re # <-- فقط برای اطمینان در آینده اضافه شده، گرچه در این راه‌حل استفاده نمی‌شود
 
 # --- متغیرهای اصلی ---
 DEFAULT_USERNAME = "admin"
@@ -14,7 +15,12 @@ ENV_FILE = ".env"
 USERS_FILE = "users.json"
 ORDERS_FILE = "orders.json"
 LOG_LINES_TO_SHOW = 100
-PYTHON_PATH = subprocess.getoutput("which python3")
+
+# --- ❗️❗️❗️ تغییر اصلی اینجاست ❗️❗️❗️ ---
+# ما مسیر پایتون را به صورت دستی روی محیط مجازی تنظیم می‌کنیم
+# تا فایل‌های systemd را با مسیر اشتباه بازنویسی نکند.
+PYTHON_PATH = "/root/testbb/myenv/bin/python3"
+# ------------------------------------------
 
 app = Flask(__name__)
 
@@ -375,12 +381,21 @@ def check_install_and_login():
 @app.route("/install", methods=["GET", "POST"])
 def install():
     """صفحه نصب (فقط بار اول)"""
-    if is_installed():
-        return redirect(url_for('login'))
+    # این صفحه حالا هم برای نصب و هم برای به‌روزرسانی تنظیمات استفاده می‌شود
+    # if is_installed():
+    #     return redirect(url_for('login')) # این خط را غیرفعال می‌کنیم تا بتوان تنظیمات را آپدیت کرد
 
-    auth = request.authorization
-    if not auth or auth.username != DEFAULT_USERNAME or auth.password != DEFAULT_PASSWORD:
-        return 'Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'}
+    # برای امنیت، دسترسی به این صفحه همچنان باید با لاگین اولیه باشد
+    # یا اگر نصب شده است، با لاگین فعلی
+    if not is_installed():
+        auth = request.authorization
+        if not auth or auth.username != DEFAULT_USERNAME or auth.password != DEFAULT_PASSWORD:
+            return 'Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'}
+    elif not session.get('logged_in'):
+         # اگر نصب شده است، فقط ادمین لاگین کرده می‌تواند به این صفحه بیاید
+         # این بخش از before_request هندل می‌شود، اما برای اطمینان اینجا هم چک می‌کنیم
+         return redirect(url_for('login'))
+
 
     if request.method == "POST":
         env_data = request.form.to_dict()
@@ -393,12 +408,14 @@ def install():
         env_data["WEB_SECRET_KEY"] = os.urandom(16).hex()
         
         try:
+            # فایل .env را بازنویسی می‌کند (هم برای نصب، هم برای آپدیت)
             with open(ENV_FILE, "w") as f:
                 for key, value in env_data.items():
                     f.write(f"{key}={value}\n")
         except Exception as e:
             return render_template_string(HTML_INSTALL, error=f"خطا در نوشتن فایل .env: {e}")
 
+        # فایل‌های systemd را بازنویسی می‌کند (با مسیر پایتون صحیح)
         success, error = create_systemd_services(env_data)
         if not success:
             return render_template_string(HTML_INSTALL, error=error)
@@ -406,7 +423,9 @@ def install():
         run_shell_command("systemctl daemon-reload")
         run_shell_command(f"systemctl enable {BOT_SERVICE_NAME}")
         run_shell_command(f"systemctl enable {WEB_SERVICE_NAME}")
-        run_shell_command(f"systemctl start {BOT_SERVICE_NAME}")
+        
+        # (مهم) ربات را ری‌استارت می‌کند تا تنظیمات جدید را بخواند
+        run_shell_command(f"systemctl restart {BOT_SERVICE_NAME}")
         
         # ریستارت کردن سرویس وب در یک ترد جداگانه تا خودکشی نکند
         def restart_web_service():
@@ -415,7 +434,7 @@ def install():
         
         threading.Thread(target=restart_web_service).start()
 
-        return "نصب با موفقیت انجام شد! در حال ریستارت کردن پنل وب و انتقال به صفحه لاگین..." + \
+        return "تنظیمات با موفقیت ذخیره شد! ربات ری‌استارت شد. در حال ریستارت کردن پنل وب و انتقال به صفحه لاگین..." + \
                "<meta http-equiv='refresh' content='5;url=/' />"
 
     return render_template_string(HTML_INSTALL)
@@ -452,9 +471,9 @@ def dashboard():
     stats = get_stats()
     
     return render_template_string(HTML_DASHBOARD, 
-                                  bot_status=bot_status, 
-                                  web_status=web_status, 
-                                  stats=stats)
+                                    bot_status=bot_status, 
+                                    web_status=web_status, 
+                                    stats=stats)
 
 @app.route("/logs")
 def logs():
