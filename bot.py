@@ -1,4 +1,13 @@
-import os, logging, json, asyncio, time, random, re, math, requests, qrcode
+import os
+import logging
+import json
+import asyncio
+import time
+import random
+import re
+import math
+import requests
+import qrcode
 from main import RouterOSManager
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any, Tuple
@@ -17,16 +26,31 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.FileHandler("bot_logs.log", encoding="utf-8"), logging.StreamHandler()]
 )
-logger = logging.getLogger("config_seller_bot")
+logger = logging.getLogger("config_seller_bot_free")
 
-api_id = int(os.getenv("TG_API_ID", "TG_API_ID"))
-api_hash = os.getenv("TG_API_HASH", "TG_API_HASH")
-bot_token = os.getenv("TG_BOT_TOKEN", "TG_BOT_TOKEN")
-MAIN_ADMIN_ID = int(os.getenv("MAIN_ADMIN_ID", "MAIN_ADMIN_ID"))
-YOUR_BRAND_ID = os.getenv("YOUR_BRAND_ID", "YOUR_BRAND_ID")
-SESS_DIR = os.path.abspath("./.sessions"); os.makedirs(SESS_DIR, exist_ok=True)
-SESSION_NAME = "config_bot"
+api_id = os.getenv("TG_API_ID")
+api_hash = os.getenv("TG_API_HASH")
+bot_token = os.getenv("TG_BOT_TOKEN")
+MAIN_ADMIN_ID_STR = os.getenv("MAIN_ADMIN_ID")
+YOUR_BRAND_ID = os.getenv("YOUR_BRAND_ID", "@your_brand")
+
+if not all([api_id, api_hash, bot_token, MAIN_ADMIN_ID_STR]):
+    logger.critical("FATAL: Missing environment variables.")
+    logger.critical("Please set: TG_API_ID, TG_API_HASH, TG_BOT_TOKEN, MAIN_ADMIN_ID")
+    exit(1)
+
+try:
+    api_id = int(api_id)
+    MAIN_ADMIN_ID = int(MAIN_ADMIN_ID_STR)
+except ValueError:
+    logger.critical("FATAL: TG_API_ID and MAIN_ADMIN_ID must be integers.")
+    exit(1)
+
+SESS_DIR = os.path.abspath("./.sessions")
+os.makedirs(SESS_DIR, exist_ok=True)
+SESSION_NAME = "config_bot_free"
 app = Client(SESSION_NAME, api_id=api_id, api_hash=api_hash, bot_token=bot_token, workdir=SESS_DIR)
+
 TMP_DIR = "/dev/shm" if os.path.exists("/dev/shm") else "."
 QR_DIR = os.path.join(TMP_DIR, "qr_codes")
 CONF_DIR = os.path.join(TMP_DIR, "configs")
@@ -42,8 +66,6 @@ ADMIN_QUEUE_FILE = "admin_queue.json"
 ORDERS_FILE = "orders.json"
 PENDING_ORDERS_FILE = "pending_orders.json"
 BANNED_USERS_FILE = "banned_users.json"
-
-
 def _load_json(path, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -157,7 +179,6 @@ class Settings:
     def set_download(self, payload: Optional[dict]): self.set("download_payload", payload)
 
 settings = Settings()
-
 class OrderManager:
     def __init__(self, file=ORDERS_FILE):
         self.file = file
@@ -229,9 +250,6 @@ class WireGuardPanel:
         try:
             resp = self.send_request("POST", url, data=json.dumps(payload))
             if resp.status_code == 200 and 'Set-Cookie' in resp.headers:
-                set_cookie_header = resp.headers["Set-Cookie"]
-                authentication_cookie = set_cookie_header.split(";")[0]
-                self.session.headers.update({"Cookie": authentication_cookie})
                 return True
             else:
                 logger.warning(f"Login request returned status {resp.status_code} but no 'Set-Cookie' header. Check credentials.")
@@ -241,7 +259,7 @@ class WireGuardPanel:
             return False
 
     def get_interface(self):
-        return "wireguard1"
+         return "wireguard1"
 
     def create_user(self, name: str, expire=None, traffic=None) -> bool:
         url = f"{self.base_url}/api/users"
@@ -416,10 +434,12 @@ def get_welcome_text() -> str:
     base_text = settings.get("general.welcome_text") or default_text
     channels = get_req_channels()
     
+    branding = f"\n\n🤖 Powered by {YOUR_BRAND_ID}"
+    
     if channels:
         channels_str = ", ".join(ch for ch in channels if ch)
-        return f"{base_text}\n\nکانال ما: {channels_str}"
-    return f"{base_text}"
+        return f"{base_text}\n\nکانال ما: {channels_str}{branding}"
+    return f"{base_text}{branding}"
 
 async def run_blocking(func, /, *args, **kwargs):
     loop = asyncio.get_running_loop()
@@ -510,6 +530,7 @@ class UsersDB:
         except: return []
 
 users_db = UsersDB()
+FREE_TARIFF_LIMIT = 10
 
 def _rand_id() -> int:
     return int(str(int(time.time()))[-6:] + f"{random.randint(10,99)}")
@@ -534,12 +555,17 @@ class TariffManager:
     def set_tariff(self, ttype, profile, size_mb, shared_users, price, group_main=None, group_sub=None, desc: Optional[str]=None):
         ttype=str(ttype).lower()
         rows=self._load(); updated=False
+        current_count = len(rows)
+        is_editing = False
         for r in rows:
             if (r["type"] == ttype and r["profile"] == profile and int(r["size_mb"]) == int(size_mb) and int(r["shared_users"]) == int(shared_users)):
                 r.update({"price":int(price),"group_main":group_main,"group_sub":group_sub,"desc":desc, "updated_at":datetime.now(timezone.utc).isoformat()})
                 if "id" not in r: r["id"]=_rand_id()
-                updated=True; break
+                updated=True; is_editing = True; break
         if not updated:
+            if current_count >= FREE_TARIFF_LIMIT:
+                logger.warning(f"Free version tariff limit ({FREE_TARIFF_LIMIT}) reached. Ignoring new tariff.")
+                return False
             rows.append({"id":_rand_id(),"type":ttype,"profile":profile,"size_mb":int(size_mb),"shared_users":int(shared_users), "price":int(price),"group_main":group_main,"group_sub":group_sub,"desc":desc, "updated_at":datetime.now(timezone.utc).isoformat()})
         
         self._save(rows)
@@ -689,11 +715,12 @@ USER_BTN_ORDERS = "🛍️ سفارشات من"
 USER_BTN_SUPPORT = "💬 پشتیبانی آنلاین"
 
 ADMIN_BTN_TARIFFS = "📄 مدیریت تعرفه‌ها"
-ADMIN_BTN_STATS = "📊 آمار ربات"
+ADMIN_BTN_STATS = "📊 آمار ربات 🇮🇷"
 ADMIN_BTN_GUIDE = "🔗 راهنمای اتصال"
 ADMIN_BTN_CARD = "💳 تنظیم شماره کارت"
 ADMIN_BTN_ORDERS = "🛍️ لیست سفارشات"
 ADMIN_BTN_SETTINGS = "⚙️ تنظیمات ربات"
+ADMIN_BTN_UPGRADE = "🚀 ارتقا به نسخه پریمیوم"
 
 
 def user_main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
@@ -720,6 +747,7 @@ def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(ADMIN_BTN_TARIFFS), KeyboardButton(ADMIN_BTN_ORDERS)],
         [KeyboardButton(ADMIN_BTN_GUIDE), KeyboardButton(ADMIN_BTN_CARD)],
         [KeyboardButton(ADMIN_BTN_SETTINGS), KeyboardButton(ADMIN_BTN_STATS)],
+        [KeyboardButton(ADMIN_BTN_UPGRADE)]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -771,12 +799,12 @@ async def smart_replace_media(c, msg, kind: str, file_id: str, caption: str = ""
 
 def _channel_button_title(ch: str) -> str:
     if ch.startswith("http"): return "عضویت / Join"
-    if ch.startswith("@"):    return f"عضویت در {ch}"
+    if ch.startswith("@"):   return f"عضویت در {ch}"
     return "عضویت / Join"
 
 def _channel_button_url(ch: str) -> str:
     if ch.startswith("http"): return ch
-    if ch.startswith("@"):    return f"https://t.me/{ch[1:]}"
+    if ch.startswith("@"):   return f"https://t.me/{ch[1:]}"
     logger.warning(f"Invalid channel format in settings: {ch}. Using fallback URL.")
     return "https://telegram.org"
 
@@ -844,7 +872,7 @@ LAST_CREDS: Dict[int, Dict[str,str]] = {}
 @app.on_message(filters.command("ping") & filters.private, group=-1)
 async def ping_admin(c, m):
     if not is_admin(m.from_user.id): return
-    await m.reply("pong ✅")
+    await m.reply("pong ✅ (Free Version)")
 
 @app.on_message(filters.command("start") & filters.private, group=-1)
 async def start_always(c, m):
@@ -870,7 +898,7 @@ async def start_always(c, m):
 
     if is_admin(uid):
         await _flush_admin_queue_for(uid)
-        admin_start_text = "سلام. به پنل مدیریت خوش آمدید."
+        admin_start_text = "سلام. به پنل مدیریت (نسخه رایگان) خوش آمدید."
         await m.reply(admin_start_text, reply_markup=admin_main_reply_keyboard())
     else:
         await m.reply(get_welcome_text(), reply_markup=user_main_reply_keyboard(uid))
@@ -911,7 +939,7 @@ async def recheck_subs(c, cq):
         is_user_admin = is_admin(uid)
         
         if is_user_admin:
-            text = "✅ عضویت تایید شد. به پنل مدیریت خوش آمدید."
+            text = "✅ عضویت تایید شد. به پنل مدیریت (نسخه رایگان) خوش آمدید."
         else:
             text = get_welcome_text()
             
@@ -939,7 +967,7 @@ async def subdebug(c, m):
         except Exception as e:
             lines.append(f"• {ch} : ERROR → {e}")
     await m.reply("\n".join(lines))
-
+    
 @app.on_callback_query(filters.regex("^u_back_home_user$"))
 async def back_home_user(c, cq):
     await cq.answer()
@@ -968,7 +996,7 @@ async def back_home(c, cq):
     except Exception:
         pass
     
-    admin_start_text = "سلام. به پنل مدیریت خوش آمدید."
+    admin_start_text = "سلام. به پنل مدیریت (نسخه رایگان) خوش آمدید."
 
     await c.send_message(
         chat_id=uid,
@@ -988,7 +1016,6 @@ async def u_support_send(c, cq):
     await cq.answer()
     user_data[cq.from_user.id] = {"awaiting":"support_message", "prompt_message_id": cq.message.id}
     await smart_edit(cq.message, "✍️ پیام پشتیبانی‌تان را ارسال کنید.\n(برای بازگشت دکمه زیر را بزنید)", reply_markup=back_menu_user())
-
 
 @app.on_callback_query(filters.regex("^u_download_file$"))
 async def u_download_file(c, cq):
@@ -1046,6 +1073,7 @@ async def main_menu_router(c, m: Message):
         ADMIN_BTN_CARD: admin_set_card,
         ADMIN_BTN_ORDERS: show_admin_orders,
         ADMIN_BTN_SETTINGS: admin_settings_main,
+        ADMIN_BTN_UPGRADE: show_premium_upgrade_info,
     }
 
     handler_func = None
@@ -1263,7 +1291,7 @@ async def text_router(c, m: Message):
             if success:
                 await smart_edit(prompt_msg, "✅ تعرفه ثبت شد.", reply_markup=back_menu_admin())
             else:
-                await smart_edit(prompt_msg, "❌ خطا در ثبت تعرفه.", reply_markup=back_menu_admin())
+                await smart_edit(prompt_msg, f"❌ خطا: سقف تعریف تعرفه در نسخه رایگان ({FREE_TARIFF_LIMIT} عدد) به پایان رسیده است.\n\n🔥 برای ارتقا به نسخه Premium و حذف این محدودیت، از دکمه «ارتقا به نسخه پریمیوم» در منوی اصلی اقدام کنید.", reply_markup=back_menu_admin())
             
             user_data.pop(uid,None)
             return
@@ -1620,7 +1648,6 @@ async def create_single_mikrotik_for_order(uid: int, profile: str, size_mb: int,
         logger.error(f"Error creating MikroTik user '{username}': {e}")
         return False, f"خطای پیش‌بینی نشده: {e}"
 
-
 @app.on_callback_query(filters.regex("^u_send_receipt$"))
 async def handle_payment(c,cq):
     await cq.answer()
@@ -1685,11 +1712,34 @@ async def admin_simple_stats(c, cq):
         return
 
     text = (
-        f"📊 **آمار ربات**\n\n"
+        f"📊 **آمارربات (نسخه رایگان)**\n\n"
         f"👥 **تعداد کل کاربران:** {total_users} نفر\n"
-        f"🛍️ **تعداد کل سفارشات:** {total_orders} عدد\n"
+        f"🛍️ **تعداد کل سفارشات:** {total_orders} عدد\n\n"
+        f"--- \n"
+        f"🔥 **آمار پیشرفته** (درآمد، کاربران فعال، فروش تعرفه‌ها و...) در **نسخه Premium** موجود است.\n"
+        f"👈 برای ارتقا، از دکمه «ارتقا به نسخه پریمیوم» در منوی اصلی استفاده کنید."
     )
     
+    await smart_edit(cq.message, text, reply_markup=back_menu_admin())
+
+async def show_premium_upgrade_info(c, cq):
+    await cq.answer()
+    global YOUR_BRAND_ID
+    
+    text = (
+        f"🔥 **ارتقا به نسخه Premium**\n\n"
+        f"با ارتقا به نسخه پرمیوم، امکانات زیر فعال خواهند شد:\n\n"
+        "💳 **سیستم کیف پول و درگاه پرداخت (بزودی)**\n"
+        "🔄 **تمدید و تغییر سرویس توسط کاربر**\n"
+        "🎁 **سیستم کدهای هدیه (شارژ کیف پول)**\n"
+        "📊 **آمار پیشرفته (درآمد، کاربران فعال و...)**\n"
+        "📢 **پیام همگانی (فوروارد و متن)**\n"
+        "👥 **مدیریت کاربران (جستجو، بن، شارژ دستی)**\n"
+        "📁 **کانفیگ OpenVPN (در صورت نیاز)**\n"
+        "♾ **حذف محدودیت تعداد تعرفه**\n"
+        "😍 **و دیگر قابلیت های باور نکردنی...**\n\n"
+        f"👈 **جهت ارتقا و دریافت مشاوره با {YOUR_BRAND_ID} تماس بگیرید.**"
+    )
     await smart_edit(cq.message, text, reply_markup=back_menu_admin())
 
 @app.on_callback_query(filters.regex("^admin_tariffs$"))
@@ -1700,11 +1750,14 @@ async def admin_tariffs(c, cq):
         ([("📋 لیست همه","t_list")],1),
         ([("🔙 بازگشت","back_home")],1)
     )
-    await smart_edit(cq.message, "📄 مدیریت تعرفه‌ها", reply_markup=kb)
+    await smart_edit(cq.message, f"📄 مدیریت تعرفه‌ها (حداکثر {FREE_TARIFF_LIMIT} تعرفه در نسخه رایگان)", reply_markup=kb)
 
 @app.on_callback_query(filters.regex("^t_add$"))
 async def t_add(c,cq):
     await cq.answer()
+    if len(tariffs.list_tariffs()) >= FREE_TARIFF_LIMIT:
+        await cq.answer(f"❌ سقف {FREE_TARIFF_LIMIT} تعرفه در نسخه رایگان پر شده است. برای حذف این محدودیت، ربات را ارتقا دهید.", show_alert=True)
+        return
     user_data[cq.from_user.id] = {"awaiting":"tariff_group_main", "prompt_message_id": cq.message.id}
     await smart_edit(cq.message, "نام گروه اصلی را بفرست:", reply_markup=back_menu_admin())
 
@@ -1968,7 +2021,7 @@ async def handle_order_approval(c, cq):
         PENDING_ORDERS[reqid] = order_data
         _save_json(PENDING_ORDERS_FILE, PENDING_ORDERS)
         
-        error_msg = f"⚠️ پردازش سفارش {reqid} با خطا مواجه شد:\n{details}\n\Sفارش به لیست انتظار بازگردانده شد. لطفاً خطا را بررسی و مجدداً تلاش کنید."
+        error_msg = f"⚠️ پردازش سفارش {reqid} با خطا مواجه شد:\n{details}\n\nسفارش به لیست انتظار بازگردانده شد. لطفاً خطا را بررسی و مجدداً تلاش کنید."
         await cq.answer(error_msg, show_alert=True)
         
         new_caption = (cq.message.caption or "") + f"\n\n**‼️ خطای پردازش: {details}**"
@@ -1978,5 +2031,5 @@ async def handle_order_approval(c, cq):
         except Exception as e: logger.error(f"Failed to send failure msg to user {uid}: {e}")
 
 if __name__ == "__main__":
-    print("🚀 Bot is running...")
+    print("🚀 Bot is running... (Free Version)")
     app.run()
