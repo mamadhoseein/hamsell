@@ -19,7 +19,7 @@ LOG_LINES_TO_SHOW = 100
 # --- ❗️❗️❗️ تغییر اصلی اینجاست ❗️❗️❗️ ---
 # ما مسیر پایتون را به صورت دستی روی محیط مجازی تنظیم می‌کنیم
 # تا فایل‌های systemd را با مسیر اشتباه بازنویسی نکند.
-PYTHON_PATH = "/root/testbb/myenv/bin/python3"
+PYTHON_PATH = "/root/hamsell/myenv/bin/python3"
 # ------------------------------------------
 
 app = Flask(__name__)
